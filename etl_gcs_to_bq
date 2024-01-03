@@ -1,0 +1,40 @@
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+
+@task(retries=3)
+def extract_from_gcs() -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/owid-co2-data.csv.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path)
+    df = pd.read_parquet(gcs_path)
+    return df
+
+
+@task()
+def write_bq(df: pd.DataFrame) -> None:
+    """Write DataFrame to BiqQuery"""
+
+    gcp_credentials_block = GcpCredentials.load("zoom-gcp-creds")
+
+    df.to_gbq(
+        destination_table="co2_emissions.co2_data",
+        project_id="co2-emissions-404413",
+        credentials=gcp_credentials_block.get_credentials_from_service_account(),
+        if_exists="append",
+    )
+
+
+@flow()
+def etl_gcs_to_bq() -> None:
+    """Main ETL flow to load data into Big Query"""
+    df = extract_from_gcs()
+    write_bq(df)
+
+
+if __name__ == "__main__":
+    etl_gcs_to_bq()
